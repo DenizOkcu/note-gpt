@@ -9,7 +9,7 @@ export default [
     output: {
       name: "Lib",
       file: "./main.js",
-      format: "iife",
+      format: "cjs",
       sourcemap: true,
     },
     plugins: [
