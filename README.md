@@ -2,7 +2,7 @@
 
 Rollup is used to bundle JavaScript modules and styles (css or scss).
 
-It comes preconfigured with
+Development uses
 
 -   [Rollup](https://rollupjs.org/),
 -   [Jest](https://jestjs.io/) and
@@ -10,14 +10,14 @@ It comes preconfigured with
 
 write
 
--   Javascript in the `src` folder,
+-   TypeScript in the `src` folder,
 -   scss in the `styles` folder and
 -   tests in the `test` folder
 
 install the dev dependencies:
 
 ```bash
-npm i
+yarn install
 ```
 
 run minification and browsersync (watches file changes):
