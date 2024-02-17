@@ -7,6 +7,7 @@ import {
   Plugin,
   PluginSettingTab,
   Setting,
+  TFile,
 } from "obsidian";
 
 // Remember to rename these classes and interfaces!
@@ -20,6 +21,7 @@ const DEFAULT_SETTINGS: NoteGptSettings = {
 };
 
 export default class NoteGpt extends Plugin {
+  fileContent = "";
   settings: NoteGptSettings;
 
   async onload() {
@@ -29,13 +31,23 @@ export default class NoteGpt extends Plugin {
     const statusBarItemEl = this.addStatusBarItem();
     statusBarItemEl.setText("noteGPT");
 
-    // This adds an editor command that can perform some operation on the current editor instance
     this.addCommand({
-      id: "note-gpt-call",
-      name: "Call",
-      editorCallback: (editor: Editor, view: MarkdownView) => {
-        console.log(editor.getSelection());
-        editor.replaceSelection("Sample Editor Command");
+      id: "call-gpt-completions",
+      name: "Generate Text with GPT",
+      callback: async () => {
+        const messages = [
+          {
+            role: "system",
+            content: "You are a helpful assistant",
+          },
+          {
+            role: "user",
+            content:
+              "Write me a function which can return all even numbers from an array",
+          },
+        ];
+
+        await this.callChatGPTStream(messages);
       },
     });
 
@@ -49,6 +61,93 @@ export default class NoteGpt extends Plugin {
   }
 
   onunload() {}
+
+  async callChatGPTStream(messages) {
+    const apiKey = this.settings.apiKey;
+    if (!apiKey) {
+      console.log("No OpenAI API Key set");
+      return;
+    }
+
+    const headers = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    };
+
+    const data = {
+      model: "gpt-4-turbo-preview",
+      messages: messages,
+      stream: true,
+      response_format: { type: "text" },
+    };
+
+    try {
+      const response = await fetch(
+        "https://api.openai.com/v1/chat/completions",
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify(data),
+        },
+      );
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer = decoder.decode(value);
+
+        if (buffer) {
+          try {
+            const jsonData = buffer;
+
+            this.handleChunk(jsonData);
+          } catch (_) {}
+        }
+      }
+    } catch (error) {
+      console.error("Error in GPT Chat Streaming:", error);
+    }
+  }
+
+  handleChunk(chunk) {
+    const lines = chunk.replace(/data:\s*/g, "").split("\n");
+
+    for (const line of lines) {
+      if (line.trim()) {
+        // Ensure the line is not empty
+        try {
+          const parsedObject = JSON.parse(line);
+          // Do something with the parsed object
+          console.log(parsedObject.choices[0].delta.content);
+          this.appendTextToActiveFile(parsedObject.choices[0].delta.content);
+        } catch (error) {
+          console.error("Error parsing JSON line:", line);
+        }
+      }
+    }
+  }
+
+  async appendTextToActiveFile(text: string) {
+    const activeFile = await this.app.workspace.getActiveFile();
+
+    if (!activeFile) {
+      new Notice("No active file");
+      return;
+    }
+
+    if (this.fileContent == "") {
+      this.fileContent = await this.app.vault.read(activeFile);
+    }
+
+    this.fileContent += text;
+
+    await this.app.vault.modify(activeFile, this.fileContent);
+  }
 
   async loadSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
