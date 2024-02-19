@@ -9,8 +9,7 @@ import {
   Setting,
   TFile,
 } from "obsidian";
-
-// Remember to rename these classes and interfaces!
+import { EventSource } from "extended-eventsource";
 
 interface NoteGptSettings {
   apiKey: string;
@@ -28,8 +27,8 @@ export default class NoteGpt extends Plugin {
     await this.loadSettings();
 
     // This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-    const statusBarItemEl = this.addStatusBarItem();
-    statusBarItemEl.setText("noteGPT");
+    // const statusBarItemEl = this.addStatusBarItem();
+    // statusBarItemEl.setText("noteGPT");
 
     this.addCommand({
       id: "call-gpt-completions",
@@ -43,7 +42,7 @@ export default class NoteGpt extends Plugin {
           {
             role: "user",
             content:
-              "Write me a function which can return all even numbers from an array",
+              "Write me function in Ruby which can add all even numbers until a number which is given as parameter",
           },
         ];
 
@@ -78,57 +77,53 @@ export default class NoteGpt extends Plugin {
       model: "gpt-4-turbo-preview",
       messages: messages,
       stream: true,
-      response_format: { type: "text" },
     };
 
-    try {
-      const response = await fetch(
-        "https://api.openai.com/v1/chat/completions",
-        {
-          method: "POST",
-          headers,
-          body: JSON.stringify(data),
-        },
-      );
+    const eventSource = new EventSource(
+      "https://api.openai.com/v1/chat/completions",
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify(data),
+      },
+    );
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer = decoder.decode(value);
-
-        if (buffer) {
-          try {
-            const jsonData = buffer;
-
-            this.handleChunk(jsonData);
-          } catch (_) {}
-        }
+    eventSource.onmessage = (event: MessageEvent) => {
+      try {
+        this.handleChunk(event.data);
+      } catch (error) {
+        eventSource.close();
       }
-    } catch (error) {
-      console.error("Error in GPT Chat Streaming:", error);
-    }
+    };
+
+    eventSource.onerror = (error) => {
+      eventSource.close();
+      console.error("Error occurred:", error);
+    };
   }
 
   handleChunk(chunk) {
-    const lines = chunk.replace(/data:\s*/g, "").split("\n");
-
-    for (const line of lines) {
-      if (line.trim()) {
-        // Ensure the line is not empty
-        try {
-          const parsedObject = JSON.parse(line);
-          // Do something with the parsed object
-          console.log(parsedObject.choices[0].delta.content);
-          this.appendTextToActiveFile(parsedObject.choices[0].delta.content);
-        } catch (error) {
-          console.error("Error parsing JSON line:", line);
+    if (chunk !== "[DONE]") {
+      try {
+        const parsedObject = JSON.parse(chunk);
+        const text = parsedObject.choices[0].delta.content;
+        if (text) {
+          this.appendTextToActiveFile(text);
         }
+      } catch (error) {
+        console.error("Error parsing JSON:", error);
       }
+    } else {
+      this.appendTextToActiveFile("\n");
+      const length = editor.lastLine();
+
+      // move cursor to end of file https://davidwalsh.name/codemirror-set-focus-line
+      const newCursor = {
+        line: length + 1,
+        ch: 0,
+      };
+      editor.setCursor(newCursor);
+      throw new Error("Stream ended with [DONE]");
     }
   }
 
