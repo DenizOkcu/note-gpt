@@ -1,18 +1,14 @@
-import {
-  App,
-  Editor,
-  MarkdownView,
-  Modal,
-  Notice,
-  Plugin,
-  PluginSettingTab,
-  Setting,
-  TFile,
-} from "obsidian";
+import { Editor, MarkdownView, Modal, Notice, Plugin, TFile } from "obsidian";
 import { EventSource } from "extended-eventsource";
+import { SampleSettingTab } from "./SampleSettingTab";
 
 interface NoteGptSettings {
   apiKey: string;
+}
+
+interface Message {
+  role: string;
+  content: string;
 }
 
 const DEFAULT_SETTINGS: NoteGptSettings = {
@@ -22,6 +18,8 @@ const DEFAULT_SETTINGS: NoteGptSettings = {
 export default class NoteGpt extends Plugin {
   fileContent = "";
   settings: NoteGptSettings;
+  messages: Message[];
+  firstMessage: Boolean = true;
 
   async onload() {
     await this.loadSettings();
@@ -33,20 +31,19 @@ export default class NoteGpt extends Plugin {
     this.addCommand({
       id: "call-gpt-completions",
       name: "Generate Text with GPT",
-      callback: async () => {
-        const messages = [
+      callback: async (): Promise<void> => {
+        this.messages = [
           {
             role: "system",
             content: "You are a helpful assistant",
           },
           {
             role: "user",
-            content:
-              "Write me function in Ruby which can add all even numbers until a number which is given as parameter",
+            content: "Write me a Haiku",
           },
         ];
 
-        await this.callChatGPTStream(messages);
+        await this.callChatGPTStream(this.messages);
       },
     });
 
@@ -61,14 +58,15 @@ export default class NoteGpt extends Plugin {
 
   onunload() {}
 
-  async callChatGPTStream(messages) {
-    const apiKey = this.settings.apiKey;
+  async callChatGPTStream(messages: Message[]): Promise<void> {
+    const apiKey: string = this.settings.apiKey;
+
     if (!apiKey) {
       console.log("No OpenAI API Key set");
       return;
     }
 
-    const headers = {
+    const headers: Record<string, string> = {
       "Content-Type": "application/json",
       Authorization: `Bearer ${apiKey}`,
     };
@@ -88,42 +86,62 @@ export default class NoteGpt extends Plugin {
       },
     );
 
-    eventSource.onmessage = (event: MessageEvent) => {
+    eventSource.onmessage = async (event: MessageEvent) => {
       try {
-        this.handleChunk(event.data);
+        await this.handleChunk(event.data);
+        this.setCursorToEndOfFile();
       } catch (error) {
         eventSource.close();
       }
     };
 
-    eventSource.onerror = (error) => {
-      eventSource.close();
+    eventSource.onerror = async (error) => {
+      await eventSource.close();
       console.error("Error occurred:", error);
     };
   }
 
-  handleChunk(chunk) {
+  async handleChunk(chunk: string) {
+    const assistantDelimitter: string = "## Assistant:\n\n";
+    const userDelimitter: string = "\n\n<hr>\n\n## User:\n\n";
+
     if (chunk !== "[DONE]") {
       try {
         const parsedObject = JSON.parse(chunk);
-        const text = parsedObject.choices[0].delta.content;
+        let text: string = parsedObject.choices[0].delta.content;
+
         if (text) {
-          this.appendTextToActiveFile(text);
+          if (this.firstMessage) {
+            text = assistantDelimitter + text;
+            this.firstMessage = false;
+          }
+
+          await this.appendTextToActiveFile(text);
         }
       } catch (error) {
         console.error("Error parsing JSON:", error);
       }
     } else {
-      this.appendTextToActiveFile("\n");
-      const length = editor.lastLine();
-
-      // move cursor to end of file https://davidwalsh.name/codemirror-set-focus-line
-      const newCursor = {
-        line: length + 1,
-        ch: 0,
-      };
-      editor.setCursor(newCursor);
+      await this.appendTextToActiveFile(userDelimitter);
+      this.setCursorToEndOfFile();
+      this.firstMessage = true;
       throw new Error("Stream ended with [DONE]");
+    }
+  }
+
+  setCursorToEndOfFile(): void {
+    // Get the total number of lines in the editor
+    const editor: Editor | undefined = this.app.workspace.activeEditor?.editor;
+    if (editor) {
+      const totalLines = editor.lineCount();
+      const lastLine = totalLines - 1;
+      const lastLineLength = editor.getLine(lastLine).length;
+
+      // Set the cursor position to the end of the file
+      editor.setCursor({
+        line: lastLine,
+        ch: lastLineLength,
+      });
     }
   }
 
@@ -148,35 +166,7 @@ export default class NoteGpt extends Plugin {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
   }
 
-  async saveSettings() {
+  async saveSettings(): Promise<void> {
     await this.saveData(this.settings);
-  }
-}
-
-class SampleSettingTab extends PluginSettingTab {
-  plugin: NoteGpt;
-
-  constructor(app: App, plugin: NoteGpt) {
-    super(app, plugin);
-    this.plugin = plugin;
-  }
-
-  display(): void {
-    const { containerEl } = this;
-
-    containerEl.empty();
-
-    new Setting(containerEl)
-      .setName("noteGPT Settings")
-      .setDesc("OpenAI API Key")
-      .addText((text) =>
-        text
-          .setPlaceholder("Enter your API Key")
-          .setValue(this.plugin.settings.apiKey)
-          .onChange(async (value) => {
-            this.plugin.settings.apiKey = value;
-            await this.plugin.saveSettings();
-          }),
-      );
   }
 }
